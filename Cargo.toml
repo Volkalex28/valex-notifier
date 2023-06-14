@@ -1,0 +1,36 @@
+[package]
+name = "valex-notifier"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.68"
+authors = ["Volkalex28 <anan20000228@gmail.com>"]
+description = """
+    valex-notifier allows to create and configure synchronous and asynchronous pub-sub interface 
+    and asynchronous rpc interface for services in embedded applications
+"""
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/Volkalex28/valex-notifier#readme"
+repository = "https://github.com/Volkalex28/valex-notifier"
+readme = "README.md"
+categiries = ["asynchronous", "data-structures", "embedded"]
+keywords = ["channels", "embassy", "async", "notification", "rpc"]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE_MIT",
+    "/LICENSE_APACHE",
+]
+
+
+[dependencies]
+anyhow = "1.0.71"
+embassy-sync = { version = "0.2.0" }
+embassy-time = { version = "0.1.1"}
+futures-util = "0.3.28"
+heapless = "0.7.16"
+log = "0.4.17"
+valex-notifier-proc = { path = "proc" }
+valex-utils = { path = "valex-utils" }
+
+[workspace]
+members = ["valex-utils"]

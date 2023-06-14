@@ -1,0 +1,276 @@
+#![allow(incomplete_features)]
+#![feature(const_trait_impl)]
+#![feature(generic_const_exprs)]
+#![feature(specialization)]
+#![feature(macro_metavar_expr)]
+#![feature(async_fn_in_trait)]
+
+mod notification {
+    use super::{app::App, buttons::Buttons, ws::Ws};
+
+    #[valex_notifier::notifier(
+        #[allow(unused)]
+    )]
+    pub struct Notifier {
+        app: App,
+        #[notifier_service(name = "Ws")]
+        websocket: Ws,
+        buttons: Buttons
+    }
+}
+
+mod buttons {
+    #[derive(Debug, Clone, valex_notifier::Event)]
+    #[notifier_event(notifier = crate::notification::Notifier, service = Buttons)]
+    pub enum Event {
+        Data(&'static str),
+    }
+
+    pub struct Additional {
+        pub iteration: usize,
+    }
+
+    #[derive(valex_notifier::Service)]
+    #[notifier_service(notifier = crate::notification::Notifier, rpc = 5)]
+    #[notifier_publisher(event = Event, protected = false)]
+    #[notifier_subscriber(event = Event, count = 3, mixer = super::AutoMix, mix_mapper = super::AutoMix::Buttons)]
+    #[notifier_subscriber(event = crate::app::Event2, count = 3)]
+    pub struct Buttons(pub bool);
+
+    #[valex_notifier::rpc_handlers(
+        notifier = crate::notification::Notifier, 
+        request = RpcRequest, 
+        response = RpcResponse,
+        error = &'static str,
+    )]
+    impl Buttons {
+        #[rpc_handler(alias = command)]
+        #[rpc_handler_setup(name = add, skip = true)]
+        #[rpc_handler_setup(name = _data, alias = data)]
+        pub fn _command1(&self, _data: usize, add: &mut Additional) -> usize {
+            _data + add.iteration
+        }
+
+        #[rpc_handler]
+        #[rpc_handler_setup(name = _data, alias = data)]
+        pub async fn _command2(&mut self, _data: bool) {}
+
+        pub async fn test_mut(&mut self) {
+            core::future::pending().await
+        }
+    }
+}
+
+#[derive(Debug, valex_notifier::Event)]
+#[notifier_mixer(notifier = notification::Notifier)]
+pub enum AutoMix {
+    __This(app::Event),
+    __This2(app::Event2),
+    Buttons(crate::buttons::Event),
+}
+
+mod app {
+    use super::AutoMix;
+
+    #[derive(Debug, Clone, valex_notifier::Event)]
+    #[notifier_event(notifier = crate::notification::Notifier, service = App)]
+    pub enum Event {
+        Data(&'static str),
+    }
+
+    #[derive(Debug, Clone, valex_notifier::Event)]
+    #[notifier_event(notifier = crate::notification::Notifier, service = App)]
+    pub enum Event2 {
+        Data(&'static str),
+    }
+
+    #[derive(valex_notifier::Service)]
+    #[notifier_service(notifier = crate::notification::Notifier)]
+    #[notifier_publisher(event = Event)]
+    #[notifier_publisher(event = Event2)]
+    #[notifier_subscriber(event = Event, count = 3, mixer = AutoMix, mix_mapper = AutoMix::__This)]
+    #[notifier_subscriber(event = Event2, count = 1, mixer = ManualMix, mix_mapper = ManualMix::__This2)]
+    #[notifier_subscriber(event = crate::buttons::Event, count = 5, mixer = AutoMix, mix_mapper = AutoMix::Buttons)]
+    // #[notifier_rpc_subscriber(service = crate::buttons::Buttons, count = 2)]
+    pub struct App;
+
+    #[valex_notifier::rpc_handlers(
+        notifier = crate::notification::Notifier, 
+        request = RpcRequest, 
+        response = RpcResponse,
+        error = usize
+    )]
+    impl App {
+        #[rpc_handler]
+        pub fn handler() -> usize {
+            0
+        }
+    }
+
+    #[derive(Debug, valex_notifier::Event)]
+    #[notifier_mixer(notifier = crate::notification::Notifier)]
+    pub enum ManualMix {
+        __This2(Event2),
+    }
+}
+
+mod ws {
+    const COUNT: usize = 5;
+
+    #[derive(Debug, Clone, valex_notifier::Event)]
+    #[notifier_event(notifier = crate::notification::Notifier, service = Ws)]
+    pub enum Event {
+        Data(&'static str),
+    }
+
+    #[derive(valex_notifier::Service)]
+    #[notifier_service(notifier = crate::notification::Notifier, count = COUNT)]
+    #[notifier_publisher(event = Event, protected = false)]
+    #[notifier_subscriber(event = Event, count = 3)]
+    #[notifier_subscriber(event = crate::app::Event, count = 1)]
+    #[notifier_rpc_subscriber(service = crate::buttons::Buttons, count = 2)]
+    pub struct Ws;
+}
+
+fn main() -> anyhow::Result<()> {
+    use crate::{app::App, buttons::Buttons, notification::Notifier, ws::Ws};
+    use valex_notifier::{
+        // pubsub::mixer,
+        service::traits::Service as _,
+        traits::pubsub::{Subscribed, SubscribedMixed},
+    };
+    // simplelog::TermLogger::init(
+    //     simplelog::LevelFilter::Debug,
+    //     simplelog::ConfigBuilder::default()
+    //         .set_thread_level(simplelog::LevelFilter::Off)
+    //         .set_level_color(simplelog::Level::Info, Some(simplelog::Color::Green))
+    //         .build(),
+    //     simplelog::TerminalMode::Stdout,
+    //     simplelog::ColorChoice::Auto,
+    // )?;
+
+    #[allow(dead_code)]
+    #[derive(Debug, Clone)]
+    enum E {
+        T,
+    }
+
+    // dbg!(notification::Notifier::COUNT);
+
+    let app = App::notif();
+    let buttons = Buttons::notif();
+    let ws = Ws::notif();
+
+    let handle = std::thread::spawn(move || {
+        // async_std::task::block_on(
+            async move {
+            use valex_notifier::service::traits::Service;
+
+            fn test(additional: &mut buttons::Additional) {
+                additional.iteration = 1;
+            }
+
+            let mut this = Buttons(false);
+            let mut additional = buttons::Additional { iteration: 100 };
+
+            let mut commands = buttons.subscriber();
+            // loop {
+            valex_utils::select! {
+                request = Buttons::rpc_request(&mut commands) => {
+                    let response = match request.take() {
+                        buttons::RpcRequest::Command { data } => buttons::RpcResponse::Command(this._command1(data, &mut additional)),
+                        buttons::RpcRequest::Command2 { data } => buttons::RpcResponse::Command2(this._command2(data).await),
+                    };
+                    log::warn!("{response:?}");
+                    _ = request.response(buttons, response).await;
+                }
+                _p = core::future::pending::<()>() => {
+                    test(&mut additional)
+                }
+                _p = this.test_mut() => {
+
+                }
+            }
+            // Buttons(false)
+            //     .rpc_handler(Buttons::notif(), &mut commands, &mut additional)
+            //     .await
+            // }
+        }
+    // )
+    });
+
+    let _r = app.subscriber::<buttons::Event>();
+    let _r = app.subscriber::<app::Event2>();
+    let _r = buttons.subscriber::<app::Event2>();
+    let _r = ws[3].subscriber::<app::Event>();
+    let _r = ws[1].subscriber::<ws::Event>();
+    let _r = ws[2].subscriber::<ws::Event>();
+    let _r = ws[0].subscriber::<ws::Event>();
+
+    let _mixed = app.mixed_subscriber::<AutoMix>();
+
+    log::warn!("{:#?}", app.publish(app::Event::Data("Hello App")));
+    log::warn!("{:#?}", app.publish(app::Event2::Data("Hello App2")));
+    {
+        let res = app
+            .publisher()
+            // .set_targets([Ws::pubsub()[3].metadata()])
+            // .allow_inactive(true)
+            .set_error_handler(|err| log::error!("Custom {err:?}"))
+            .publish(app::Event::Data("Hello2 App"));
+        log::warn!("{res:#?}");
+    }
+    log::warn!(
+        "{:#?}",
+        buttons.publish(buttons::Event::Data("Hello Buttons"))
+    );
+    log::warn!("{:#?}", ws[4].publish(ws::Event::Data("Hello Ws")));
+
+    fn test_mix<S: SubscribedMixed<AutoMix, Notifier = Notifier>>(mut mixed: S) {
+        while let Some(data) = mixed.try_next() {
+            log::info!("{data:?}")
+        }
+    }
+    test_mix(_mixed);
+
+    async fn test<P>(p: &'static P)
+    where
+        P: Subscribed<app::Event, Notifier = Notifier>,
+        // P: Subscribed<ws::Event, Notifier = Notifier>,
+        P: Subscribed<buttons::Event, Notifier = Notifier>,
+    {
+        let mut receiver1 = p.subscriber();
+        let mut receiver2 = p.subscriber();
+
+        let _res = valex_utils::select! {
+            _1 = receiver1.next() => {
+                Ok(_1)
+            }
+            _2 = receiver2.next() => {
+                Err(_2)
+            }
+        };
+
+        let _res = valex_utils::join!({ receiver1.next() }, { receiver2.next() }).await;
+
+        match receiver1.next_raw().await {
+            app::Event::Data(_) => (),
+        }
+
+        match receiver2.next_raw().await {
+            buttons::Event::Data(_) => (),
+        }
+    }
+
+    // async_std::task::block_on(async move {
+    //     _ = test(&**app);
+    //     println!("RPC --------------------------------------------");
+    //     let _rpc = ws[4].rpc::<Buttons>();
+    //     let _f = _rpc.command(13).await;
+    //     log::warn!("{_f:?}")
+    // });
+
+    let _ = handle.join();
+
+    Ok(())
+}
